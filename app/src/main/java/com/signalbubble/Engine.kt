@@ -1,20 +1,47 @@
 package com.signalbubble
 
 import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.math.abs
 import kotlin.math.sqrt
 
 data class Candle(val o: Double, val h: Double, val l: Double, val c: Double)
-data class Result(val up: Boolean, val pct: Int, val ups: Int, val downs: Int, val total: Int)
+data class Result(val up: Boolean, val pct: Int, val ups: Int, val downs: Int, val total: Int, val note: String)
 
 object Engine {
-    // Binance klines: symbol like BTCUSDT, interval 1m/3m/5m/15m/30m/1h
-    fun fetch(symbol: String, interval: String): List<Candle> {
-        val u = "https://api.binance.com/api/v3/klines?symbol=$symbol&interval=$interval&limit=300"
-        val a = JSONArray(URL(u).readText())
-        return (0 until a.length()).map { val k = a.getJSONArray(it)
-            Candle(k.getString(1).toDouble(), k.getString(2).toDouble(), k.getString(3).toDouble(), k.getString(4).toDouble()) }
+    private fun get(u: String): String {
+        val cn = URL(u).openConnection() as HttpURLConnection
+        cn.connectTimeout = 8000; cn.readTimeout = 8000; cn.setRequestProperty("User-Agent", "Mozilla/5.0")
+        if (cn.responseCode != 200) throw Exception("HTTP " + cn.responseCode)
+        return cn.inputStream.bufferedReader().readText()
+    }
+
+    // XXXUSDT -> Binance (4 servers), anything else (AAPL, TSLA...) -> Yahoo Finance
+    fun fetch(sym: String, tf: String): Pair<List<Candle>, Long> {
+        if (sym.endsWith("USDT")) {
+            val q = "/api/v3/klines?symbol=$sym&interval=$tf&limit=300"
+            var err = ""
+            for (h in listOf("https://data-api.binance.vision", "https://api.binance.com", "https://api1.binance.com", "https://api.binance.us")) {
+                try {
+                    val a = JSONArray(get(h + q))
+                    val c = (0 until a.length()).map { val k = a.getJSONArray(it)
+                        Candle(k.getString(1).toDouble(), k.getString(2).toDouble(), k.getString(3).toDouble(), k.getString(4).toDouble()) }
+                    return Pair(c, a.getJSONArray(a.length() - 1).getLong(6))
+                } catch (e: Exception) { err = e.message.orEmpty() }
+            }
+            throw Exception("Binance failed: $err")
+        }
+        val range = when (tf) { "1m" -> "1d"; "5m" -> "5d"; else -> "1mo" }
+        val j = JSONObject(get("https://query1.finance.yahoo.com/v8/finance/chart/$sym?interval=$tf&range=$range"))
+        val r = j.getJSONObject("chart").getJSONArray("result").getJSONObject(0)
+        val ts = r.getJSONArray("timestamp"); val q = r.getJSONObject("indicators").getJSONArray("quote").getJSONObject(0)
+        val o = q.getJSONArray("open"); val h = q.getJSONArray("high"); val l = q.getJSONArray("low"); val c = q.getJSONArray("close")
+        val out = ArrayList<Candle>()
+        for (i in 0 until c.length()) if (!c.isNull(i) && !o.isNull(i) && !h.isNull(i) && !l.isNull(i))
+            out.add(Candle(o.getDouble(i), h.getDouble(i), l.getDouble(i), c.getDouble(i)))
+        return Pair(out, ts.getLong(ts.length() - 1) * 1000)
     }
 
     private fun ema(x: List<Double>, p: Int): List<Double> {
@@ -66,9 +93,12 @@ object Engine {
     }
 
     fun analyze(symbol: String, interval: String): Result {
-        val v = votes(fetch(symbol, interval))
+        val (c, last) = fetch(symbol, interval)
+        if (c.size < 60) throw Exception("Only ${c.size} candles. Market closed or wrong symbol?")
+        val v = votes(c)
         val u = v.count { it > 0 }; val d = v.count { it < 0 }
-        val up = u >= d; val pct = (100.0 * maxOf(u, d) / maxOf(1, u + d)).toInt()
-        return Result(up, pct, u, d, v.size)
+        val age = (System.currentTimeMillis() - last) / 60000
+        val note = if (age > 20) "\nLast candle ${age}m old - market closed?" else ""
+        return Result(u >= d, (100.0 * maxOf(u, d) / maxOf(1, u + d)).toInt(), u, d, v.size, note)
     }
 }

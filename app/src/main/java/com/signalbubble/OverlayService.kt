@@ -55,21 +55,21 @@ class OverlayService : Service() {
         val sym = prefs.getString("sym", "BTCUSDT")!!; val tf = prefs.getString("tf", "1m")!!
         b.text = "…"
         Thread {
-            val txt: String; val col: Int
+            var txt = ""; var col = 0
             try {
                 val r = Engine.analyze(sym, tf)
-                txt = (if (r.up) "▲ UP " else "▼ DOWN ") + r.pct + "%\n$sym $tf · ${r.ups}↑ ${r.downs}↓ of ${r.total}"
+                txt = (if (r.up) "▲ UP " else "▼ DOWN ") + r.pct + "%\n$sym $tf · ${r.ups}↑ ${r.downs}↓ of ${r.total}" + r.note
                 col = if (r.up) Color.parseColor("#E61B8F3A") else Color.parseColor("#E6C62828")
-            } catch (e: Exception) { txt = "Data error\nCheck pair (e.g. BTCUSDT)"; col = Color.DKGRAY }
+            } catch (e: Exception) { txt = "Error: " + e.message.orEmpty().take(120); col = Color.DKGRAY }
             ui.post { b.text = "AI"; show(txt, col) }
         }.start()
     }
 
     private fun show(t: String, c: Int) {
         popup?.let { try { wm.removeView(it) } catch (_: Exception) {} }
-        val v = TextView(this).apply { text = t; setTextColor(Color.WHITE); textSize = 20f; setPadding(48, 32, 48, 32); background = bg(c, 40f) }
-        wm.addView(v, lp(120, 250, false)); popup = v
-        ui.postDelayed({ try { wm.removeView(v) } catch (_: Exception) {}; if (popup === v) popup = null }, 6000)
+        val v = TextView(this).apply { text = t; setTextColor(Color.WHITE); textSize = 18f; setPadding(48, 32, 48, 32); background = bg(c, 40f) }
+        wm.addView(v, lp(60, 250, false)); popup = v
+        ui.postDelayed({ try { wm.removeView(v) } catch (_: Exception) {}; if (popup === v) popup = null }, 7000)
     }
 
     override fun onDestroy() {
